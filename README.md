@@ -26,15 +26,15 @@ configuration.
 
 ## Running
 
-Before running it, produce a YAML file with the tokens obtained at the
+Before running it, produce a JSON file with tokens obtained at the
 [WCM Box.com domain](https://wcm.app.box.com/developers/console/app/1288907):
-```yaml
-client_id: '12345678901234567890123456789012'
-client_secret: '12345678901234567890123456789012'
-access_token: '12345678901234567890123456789012'
+```json
+{"client_id": "12345678901234567890123456789012",
+"client_secret": "12345678901234567890123456789012",
+"access_token": "12345678901234567890123456789012"}
 ```
 Make sure you're the only one who can read the credentials using `chmod 400`.
-By default `imctransfer` looks in `~/.box.access_tokens.yaml`, but you can pass
+By default `imctransfer` looks in `~/.imctransfer.auth.json`, but you can pass
 a custom file with the `--secrets` option.
 
 Simply run without arguments on the root of the project:

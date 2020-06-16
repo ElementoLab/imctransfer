@@ -17,8 +17,7 @@ import logging
 from pathlib import Path
 
 
-import yaml
-from boxsdk import OAuth2, Client, BoxOAuthException
+from boxsdk import OAuth2, Client, BoxOAuthException  # OAuth2, JWTAuth
 from boxsdk.object.file import File as BoxFile
 from boxsdk.object.folder import Folder as BoxFolder
 import iso8601  # for date string -> date object  # import rfc3339  # for date object -> date string
@@ -31,12 +30,12 @@ File = Union[BoxFile]
 
 
 REFRESH_TIME = 2 * 60 * 60  # refresh time in seconds
-SECRET_FILE = Path("~/.box.access_tokens.yaml").expanduser().absolute()
+SECRET_FILE = Path("~/.imctransfer.auth.json").expanduser().absolute()
 DB_FILE = Path("~/.imctransfer.urls.json").expanduser().absolute()
 FILE_TYPE = "mcd"
 PROJECT_DIR = Path(".").absolute()
 METADATA_FILE = Path("metadata") / "annotation.auto.csv"
-DATA_DIR = "data"
+DATA_DIR = Path("data")
 
 
 class Daemon:
@@ -100,6 +99,8 @@ class Daemon:
                     mismatch = self.get_sha1(output_file) != file.file_version.sha1
                     if mismatch:
                         self.log.info("File exists but SHA1 has does not match. Re-downloading.")
+                    else:
+                        downloaded = True
                 if not output_file.exists() or self.args.overwrite or mismatch:
                     self.log.info("Downloading '%s' to '%s'.", name, output_file)
                     self.download_file(file, output_file)
@@ -118,7 +119,7 @@ class Daemon:
                 "url": url,
                 "sha1": file.file_version.sha1,
                 "downloaded": downloaded,
-                "written_to": output_file if downloaded else None,
+                "written_to": output_file.absolute() if downloaded else None,
             }
 
         if not self.args.metadata:
@@ -171,7 +172,7 @@ def argument_parser() -> argparse.ArgumentParser:
     """The argument parser for the script."""
     parser = argparse.ArgumentParser()
     _vars = ["client_id", "client_secret", "access_token"]
-    hlp = f"YAML file with 3 variables: {', '.join(_vars)}. Defaults to '{SECRET_FILE}'."
+    hlp = f"JSON file with 3 variables: {', '.join(_vars)}. Defaults to '{SECRET_FILE}'."
     parser.add_argument("--secrets", dest="secrets_file", default=SECRET_FILE, type=Path, help=hlp)
     hlp = f"Database file. Defaults to '{DB_FILE}'."
     parser.add_argument("--db", dest="db_file", default=DB_FILE, type=Path, help=hlp)
@@ -229,9 +230,19 @@ def main() -> NoReturn:
 
     # Setup box.com connection
     log.info("Reading credentials and setting up connection with server.")
-    secret_params = yaml.safe_load(open(args.secrets_file, "r"))
+    # For OAuth:
+    # # OAuth with developer token
+    secret_params = json.load(open(args.secrets_file, "r"))
     oauth = OAuth2(**secret_params)
     client = Client(oauth)
+    # # with user OAuth
+    # auth_url, csrf_token = oauth.get_authorization_url("https://localhost:8000")
+    # oauth.authenticate(input("Please enter the code here: "))
+    # client = Client(oauth)
+
+    # # For JWTAuth:
+    # config = JWTAuth.from_settings_file(args.secrets_file)
+    # client = Client(config)
 
     # Initialize daemon
     daemon = Daemon(client=client, log=log, args=args)
