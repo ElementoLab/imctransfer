@@ -37,11 +37,18 @@ Make sure you're the only one who can read the credentials using `chmod 400`.
 By default `imctransfer` looks in `~/.box.access_tokens.yaml`, but you can pass
 a custom file with the `--secret` option.
 
-Simply point to the root project directory that will be hosting files using the `-p/--project` option:
+Simply run without arguments on the root of the project:
+```bash
+imctransfer
+```
+
+Or specify an alternative root project directory that will be hosting the files,
+using the `-o/--output-dir` option:
 
 ```bash
-imctransfer -p <directory>
+imctransfer -o <directory>
 ```
+
 To see all options, simply do:
 ```bash
 imctransfer --help

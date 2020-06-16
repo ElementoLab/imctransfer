@@ -97,7 +97,7 @@ class Daemon:
             output_file = self.args.data_dir / name / file.name
             downloaded = False
             mismatch = False
-            if self.args.save_files:
+            if self.args.download:
                 output_file.parent.mkdir(exist_ok=True, parents=True)
                 if output_file.exists():
                     mismatch = self.get_sha1(output_file) != file.file_version.sha1
@@ -124,7 +124,7 @@ class Daemon:
                 "written_to": output_file if downloaded else None,
             }
 
-        if not self.args.save_metadata:
+        if not self.args.metadata:
             return
         meta = pd.DataFrame(_meta).T
         if meta.empty:
@@ -198,7 +198,7 @@ def argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("-d", "--data-dir", type=Path, help=hlp)
     hlp = f"Root project directory to write files to. Defaults to '{PROJECT_DIR}'."
     parser.add_argument(
-        "-p", "--project-dir", dest="project_dir", default=PROJECT_DIR, type=Path, help=hlp
+        "-o", "--output-dir", dest="project_dir", default=PROJECT_DIR, type=Path, help=hlp
     )
     return parser
 
