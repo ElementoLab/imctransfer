@@ -10,7 +10,7 @@ Download them and write their metadata to disk.
 import sys
 import argparse
 import hashlib
-from typing import List, Union
+from typing import List, Union, NoReturn
 import json
 import time
 import logging
@@ -39,27 +39,135 @@ METADATA_FILE = Path("metadata") / "annotation.auto.csv"
 DATA_DIR = "data"
 
 
-def main():
-    """The main loop of the script."""
-    while True:
-        log.info("Querying for new files.")
-        # urls = crawl_for_file_type(root_folder, file_type=args.file_type)
-        urls = query_for_file_type(file_type=args.file_type)
-        if get_db(args.db_file) != urls:
-            log.info("Found new files.")
-            get_metadata(
-                urls,
-                metadata_file=args.metadata_file,
-                data_dir=args.data_dir,
-                save_metadata=args.metadata,
-                save_files=args.download,
-                overwrite=args.overwrite,
-            )
-            save_db(urls, args.db_file)
-            log.info("Completed query.")
-        else:
-            log.info("Did not find new files.")
-        time.sleep(args.refresh_time)
+class Daemon:
+    def __init__(self, client, log, args, fresh: bool = False):
+        fresh = False
+        self.client = client
+        self.log = log
+        self.args = args
+        if fresh:
+            self.clean_db()
+
+    def run(self) -> NoReturn:
+        """The main loop of the script."""
+        while True:
+            self.log.info("Querying for new files.")
+            # urls = crawl_for_file_type(root_folder, file_type=self.file_type)
+            urls = self.query_for_file_type()
+            if self.get_db() != urls:
+                self.log.info("Found new files.")
+                self.get_metadata(urls)
+                self.save_db(urls)
+                self.log.info("Completed query.")
+            else:
+                self.log.info("Did not find new files.")
+            time.sleep(self.args.refresh_time)
+
+    def clean_db(self):
+        """Remove the database file."""
+        try:
+            self.args.db_file.unlink()
+            self.log.info("Removing previously existing database.")
+        except FileNotFoundError:
+            pass
+
+    def query_for_file_type(self) -> List[str]:
+        """
+        Query Box.com user folder and its children for a file of the `file_type`
+        and return their URLs.
+        """
+        ft = self.args.file_type
+        items = self.client.search().query(f"*.{ft}", file_extensions=[ft])
+        return [item.get_url() for item in items]
+
+    def get_metadata(self, urls: List[str]):
+        """
+        Get the metadata for the Box.com files in the `urls`,
+        build a dataframe with them and download.
+        """
+        _meta = dict()
+        for url in urls:
+            file = File(session=self.client.session, object_id=url.split("/")[-1])
+            file = file.get(fields=["name", "created_at", "created_by", "file_version"])  # type: ignore
+
+            print(file.name)
+            name = file.name.replace(".mcd", "").replace(" ", "_")
+            dt = iso8601.parse_date(file.created_at)
+
+            output_file = self.args.data_dir / name / file.name
+            downloaded = False
+            mismatch = False
+            if self.args.save_files:
+                output_file.parent.mkdir(exist_ok=True, parents=True)
+                if output_file.exists():
+                    mismatch = self.get_sha1(output_file) != file.file_version.sha1
+                    if mismatch:
+                        self.log.info("File exists but SHA1 has does not match. Re-downloading.")
+                if not output_file.exists() or self.args.overwrite or mismatch:
+                    self.log.info("Downloading '%s' to '%s'.", name, output_file)
+                    self.download_file(file, output_file)
+                    if self.get_sha1(output_file) == file.file_version.sha1:
+                        downloaded = True
+                        self.log.info("SHA1 matches.")
+                    else:
+                        self.log.error("SHA1 mismatch - will delete file.")
+                        output_file.unlink()
+
+            _meta[name] = {
+                "sample_name": name,
+                "mcd_file": file.name,
+                "created_by": file.created_by.name,
+                "created_at": dt.isoformat(),
+                "url": url,
+                "sha1": file.file_version.sha1,
+                "downloaded": downloaded,
+                "written_to": output_file if downloaded else None,
+            }
+
+        if not self.args.save_metadata:
+            return
+        meta = pd.DataFrame(_meta).T
+        if meta.empty:
+            return
+        self.log.info("Saving metadata.")
+        meta["acquisition_date"] = meta["sample_name"].str.extract(r"^(20\d{6}).*")[0]
+        meta.sort_values("acquisition_date").to_csv(self.args.metadata_file, index=False)
+
+    # async def download_file(self, file: File, output_file: Path) -> None:
+    #     await file.download_to(open(output_file.absolute(), "wb"))
+
+    def download_file(self, file: File, output_file: Path) -> None:
+        """Download `file` from Box.com to `output_file` in local disk."""
+        try:
+            file.download_to(open(output_file, "wb"))
+        except KeyboardInterrupt:
+            output_file.unlink()
+            raise
+        self.log.info("Dowload completed.")
+
+    @staticmethod
+    def get_sha1(file: Path, buffer_size: int = 65536) -> str:
+        """Calculate the sha1 hash of `file`."""
+        sha1 = hashlib.sha1()
+
+        with open(file, "rb") as f:
+            while True:
+                data = f.read(buffer_size)
+                if not data:
+                    break
+                sha1.update(data)
+        return sha1.hexdigest()
+
+    def get_db(self) -> List[str]:
+        """Load database from disk."""
+        try:
+            return json.load(open(self.args.db_file, "r"))
+        except FileNotFoundError:
+            return []
+
+    def save_db(self, obj: List[str]) -> None:
+        """Serialize database to disk."""
+        json.dump(obj, open(self.args.db_file, "w"))
 
 
 def argument_parser() -> argparse.ArgumentParser:
@@ -108,115 +216,8 @@ def setup_logger(name="imctransfer", level=logging.INFO):
     return logger
 
 
-def query_for_file_type(file_type: str = "mcd") -> List[str]:
-    """
-    Query Box.com user folder and its children for a file of the `file_type` and return their URLs.
-    """
-    items = client.search().query(f"*.{file_type}", file_extensions=[file_type])
-    return [item.get_url() for item in items]
-
-
-def get_metadata(
-    urls: List[str],
-    metadata_file: Path,
-    data_dir: Path,
-    save_metadata: bool = True,
-    save_files: bool = True,
-    overwrite: bool = False,
-):
-    """
-    Get the metadata for the Box.com files in the `urls`, build a dataframe with them and download.
-    """
-    _meta = dict()
-    for url in urls:
-        file = File(session=client.session, object_id=url.split("/")[-1])
-        file = file.get(fields=["name", "created_at", "created_by", "file_version"])  # type: ignore
-
-        print(file.name)
-        name = file.name.replace(".mcd", "")
-        dt = iso8601.parse_date(file.created_at)
-
-        output_file = data_dir / name / file.name.replace(" ", "_")
-        downloaded = False
-        mismatch = False
-        if save_files:
-            output_file.parent.mkdir(exist_ok=True, parents=True)
-            if output_file.exists():
-                mismatch = get_sha1(output_file) != file.file_version.sha1
-                if mismatch:
-                    log.info("File exists but SHA1 has does not match. Re-downloading.")
-            if not output_file.exists() or overwrite or mismatch:
-                log.info("Downloading '%s' to '%s'.", name, output_file)
-                download_file(file, output_file)
-                if get_sha1(output_file) == file.file_version.sha1:
-                    downloaded = True
-                    log.info("SHA1 matches.")
-                else:
-                    log.error("SHA1 mismatch - will delete file.")
-                    output_file.unlink()
-
-        _meta[name] = {
-            "sample_name": name,
-            "mcd_file": file.name,
-            "created_by": file.created_by.name,
-            "created_at": dt.isoformat(),
-            "url": url,
-            "sha1": file.file_version.sha1,
-            "downloaded": downloaded,
-            "written_to": output_file if downloaded else None,
-        }
-
-    if not save_metadata:
-        return
-    meta = pd.DataFrame(_meta).T
-    if meta.empty:
-        return
-    log.info("Saving metadata.")
-    meta["acquisition_date"] = meta["sample_name"].str.extract(r"^(20\d{6}).*")[0]
-    meta.sort_values("acquisition_date").to_csv(metadata_file, index=False)
-
-
-# async def download_file(file: File, output_file: Path) -> None:
-#     await file.download_to(open(output_file.absolute(), "wb"))
-
-
-def download_file(file: File, output_file: Path) -> None:
-    """Download `file` from Box.com to `output_file` in local disk."""
-    try:
-        file.download_to(open(output_file, "wb"))
-    except KeyboardInterrupt:
-        output_file.unlink()
-        raise
-    log.info("Dowload completed.")
-
-
-def get_sha1(file: Path, buffer_size: int = 65536) -> str:
-    """Calculate the sha1 hash of `file`."""
-    sha1 = hashlib.sha1()
-
-    with open(file, "rb") as f:
-        while True:
-            data = f.read(buffer_size)
-            if not data:
-                break
-            sha1.update(data)
-    return sha1.hexdigest()
-
-
-def get_db(db_file: Path) -> List[str]:
-    """Load database from disk."""
-    try:
-        return json.load(open(db_file, "r"))
-    except FileNotFoundError:
-        return []
-
-
-def save_db(obj: List[str], db_file: Path) -> None:
-    """Serialize database to disk."""
-    json.dump(obj, open(db_file, "w"))
-
-
-if __name__ == "__main__":
+def main():
+    """Main entry point of the script."""
     # Get a logger
     log = setup_logger()
 
@@ -229,26 +230,24 @@ if __name__ == "__main__":
     args.metadata_file.parent.mkdir(exist_ok=True, parents=True)
     args.data_dir.mkdir(exist_ok=True, parents=True)
 
-    if args.fresh:
-        try:
-            args.db_file.unlink()
-            log.info("Removing previously existing database.")
-        except FileNotFoundError:
-            pass
-
     # Setup box.com connection
     log.info("Reading credentials and setting up connection with server.")
     secret_params = yaml.safe_load(open(args.secrets_file, "r"))
     oauth = OAuth2(**secret_params)
     client = Client(oauth)
 
-    # Start querying
-    log.info("Starting query.")
+    daemon = Daemon(client=client, log=log, args=args)
+
+    log.info("Starting daemon.")
     try:
-        sys.exit(main())
+        sys.exit(daemon.run())
     except KeyboardInterrupt:
         log.info("User interrupted. Terminating.")
         sys.exit(0)
-    except BoxOAuthException as e:
+    except BoxOAuthException:
         log.error("Could not establish connection with server.")
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
