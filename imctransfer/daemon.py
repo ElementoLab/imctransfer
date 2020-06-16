@@ -56,7 +56,7 @@ class Daemon:
             urls = self.query_for_file_type()
             if self.get_db() != urls:
                 self.log.info("Found new files.")
-                self.get_metadata(urls)
+                self.get_metadata_and_data(urls)
                 self.save_db(urls)
                 self.log.info("Completed query.")
             else:
@@ -65,11 +65,8 @@ class Daemon:
 
     def clean_db(self):
         """Remove the database file."""
-        try:
-            self.args.db_file.unlink()
-            self.log.info("Removing previously existing database.")
-        except FileNotFoundError:
-            pass
+        self.log.info("Removing previously existing database.")
+        self.args.db_file.unlink(missing_ok=True)
 
     def query_for_file_type(self) -> List[str]:
         """
@@ -80,7 +77,7 @@ class Daemon:
         items = self.client.search().query(f"*.{ft}", file_extensions=[ft])
         return [item.get_url() for item in items]
 
-    def get_metadata(self, urls: List[str]):
+    def get_metadata_and_data(self, urls: List[str]) -> None:
         """
         Get the metadata for the Box.com files in the `urls`,
         build a dataframe with them and download.
@@ -203,7 +200,7 @@ def argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def setup_logger(name="imctransfer", level=logging.INFO):
+def setup_logger(name="imctransfer", level=logging.INFO) -> logging.Logger:
     """The logger for the script."""
     logger = logging.getLogger(name)
     logger.setLevel(level)
@@ -216,7 +213,7 @@ def setup_logger(name="imctransfer", level=logging.INFO):
     return logger
 
 
-def main():
+def main() -> NoReturn:
     """Main entry point of the script."""
     # Get a logger
     log = setup_logger()
@@ -236,6 +233,7 @@ def main():
     oauth = OAuth2(**secret_params)
     client = Client(oauth)
 
+    # Initialize daemon
     daemon = Daemon(client=client, log=log, args=args)
 
     log.info("Starting daemon.")

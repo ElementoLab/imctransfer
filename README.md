@@ -35,7 +35,7 @@ access_token: '12345678901234567890123456789012'
 ```
 Make sure you're the only one who can read the credentials using `chmod 400`.
 By default `imctransfer` looks in `~/.box.access_tokens.yaml`, but you can pass
-a custom file with the `--secret` option.
+a custom file with the `--secrets` option.
 
 Simply run without arguments on the root of the project:
 ```bash
