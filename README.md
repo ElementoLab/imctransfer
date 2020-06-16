@@ -1,8 +1,8 @@
 # IMCtransfer
 
-This is a repository to manage transference of imaging mass cytometry
-MCD files produced by the Hyperion instrument of
-[EIPM](https://eipm.weill.cornell.edu/) to the
+A daemon to manage transference of imaging mass cytometry MCD files produced by
+the Hyperion instrument of [EIPM](https://eipm.weill.cornell.edu/), from
+[WCM's Box.com](https://wcm.app.box.com) to the
 [SCU cluster](https://scu.med.cornell.edu/).
 
 It will detect new files added, maintain a database of existing files, download

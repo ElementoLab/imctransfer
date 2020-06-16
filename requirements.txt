@@ -1,4 +1,4 @@
 boxsdk
 iso8601
-yaml
+pyyaml
 pandas>=1.0.1
