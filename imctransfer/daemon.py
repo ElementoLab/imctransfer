@@ -72,8 +72,9 @@ class Daemon:
         Query Box.com user folder and its children for a file of the `file_type`
         and return their URLs.
         """
-        ft = self.args.file_type
-        items = self.client.search().query(f"*.{ft}", file_extensions=[ft])
+        items = self.client.search().query(
+            self.args.query_string, file_extensions=[self.args.file_type]
+        )
         return [item.get_url() for item in items]
 
     def get_metadata_and_data(self, urls: List[str]) -> None:
@@ -184,6 +185,8 @@ def argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--overwrite", dest="overwrite", action="store_true", help=hlp)
     hlp = "Ignore previous queries and start anew. Will delete previous database."
     parser.add_argument("--fresh", dest="fresh", action="store_true", help=hlp)
+    hlp = "Query string to search files. Use to restrict search."
+    parser.add_argument("-q", "--query-string", dest="query_string", default=FILE_TYPE, help=hlp)
     hlp = "File type ending to look for. Defaults to 'mcd'."
     parser.add_argument("-e", "--file-ending", dest="file_type", default=FILE_TYPE, help=hlp)
     hlp = "Time in between crawls. Default is 2 hours."
