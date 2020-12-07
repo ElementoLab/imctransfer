@@ -9,12 +9,14 @@ Download them and write their metadata to disk.
 
 import sys
 import argparse
+import datetime
 import hashlib
 from typing import List, Union, NoReturn
 import json
 import time
 import logging
 from pathlib import Path
+import webbrowser
 
 
 from boxsdk import OAuth2, Client, BoxOAuthException  # OAuth2, JWTAuth
@@ -30,6 +32,7 @@ File = Union[BoxFile]
 
 
 REFRESH_TIME = 2 * 60 * 60  # refresh time in seconds
+TIMEOUT_TIME = 3  # timeout time in hours
 SECRET_FILE = Path("~/.imctransfer.auth.json").expanduser().absolute()
 DB_FILE = Path("~/.imctransfer.urls.json").expanduser().absolute()
 FILE_TYPE = "mcd"
@@ -39,7 +42,7 @@ DATA_DIR = Path("data")
 
 
 class Daemon:
-    def __init__(self, client, log, args, fresh: bool = False):
+    def __init__(self, client, log, args, fresh: bool = False) -> None:
         fresh = False
         self.client = client
         self.log = log
@@ -49,6 +52,11 @@ class Daemon:
 
     def run(self) -> NoReturn:
         """The main loop of the script."""
+
+        def now() -> datetime.datetime:
+            return datetime.datetime.now()
+
+        self.start_time = now()
         while True:
             self.log.info("Querying for new files.")
             # urls = crawl_for_file_type(root_folder, file_type=self.file_type)
@@ -60,6 +68,9 @@ class Daemon:
                 self.log.info("Completed query.")
             else:
                 self.log.info("Did not find new files.")
+            if now() - self.start_time > self.args.timeout_delta:
+                self.log.info("Exiting due to timeout time.")
+                sys.exit(0)
             time.sleep(self.args.refresh_time)
 
     def clean_db(self):
@@ -84,7 +95,9 @@ class Daemon:
         """
         _meta = dict()
         for url in urls:
-            file = File(session=self.client.session, object_id=url.split("/")[-1])
+            file = File(
+                session=self.client.session, object_id=url.split("/")[-1]
+            )
             file = file.get(fields=["name", "created_at", "created_by", "file_version"])  # type: ignore
 
             print(file.name)
@@ -97,13 +110,19 @@ class Daemon:
             if self.args.download:
                 output_file.parent.mkdir(exist_ok=True, parents=True)
                 if output_file.exists():
-                    mismatch = self.get_sha1(output_file) != file.file_version.sha1
+                    mismatch = (
+                        self.get_sha1(output_file) != file.file_version.sha1
+                    )
                     if mismatch:
-                        self.log.info("File exists but SHA1 has does not match. Re-downloading.")
+                        self.log.info(
+                            "File exists but SHA1 has does not match. Re-downloading."
+                        )
                     else:
                         downloaded = True
                 if not output_file.exists() or self.args.overwrite or mismatch:
-                    self.log.info("Downloading '%s' to '%s'.", name, output_file)
+                    self.log.info(
+                        "Downloading '%s' to '%s'.", name, output_file
+                    )
                     self.download_file(file, output_file)
                     if self.get_sha1(output_file) == file.file_version.sha1:
                         downloaded = True
@@ -129,8 +148,12 @@ class Daemon:
         if meta.empty:
             return
         self.log.info("Saving metadata.")
-        meta["acquisition_date"] = meta["sample_name"].str.extract(r"^(20\d{6}).*")[0]
-        meta.sort_values("acquisition_date").to_csv(self.args.metadata_file, index=False)
+        meta["acquisition_date"] = meta["sample_name"].str.extract(
+            r"^(20\d{6}).*"
+        )[0]
+        meta.sort_values("acquisition_date").to_csv(
+            self.args.metadata_file, index=False
+        )
 
     # async def download_file(self, file: File, output_file: Path) -> None:
     #     await file.download_to(open(output_file.absolute(), "wb"))
@@ -174,23 +197,57 @@ def argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     _vars = ["client_id", "client_secret", "access_token"]
     hlp = f"JSON file with 3 variables: {', '.join(_vars)}. Defaults to '{SECRET_FILE}'."
-    parser.add_argument("--secrets", dest="secrets_file", default=SECRET_FILE, type=Path, help=hlp)
+    parser.add_argument(
+        "--secrets",
+        dest="secrets_file",
+        default=SECRET_FILE,
+        type=Path,
+        help=hlp,
+    )
     hlp = f"Database file. Defaults to '{DB_FILE}'."
-    parser.add_argument("--db", dest="db_file", default=DB_FILE, type=Path, help=hlp)
+    parser.add_argument(
+        "--db", dest="db_file", default=DB_FILE, type=Path, help=hlp
+    )
     hlp = "Do not save CSV metadata."
-    parser.add_argument("--no-metadata", dest="metadata", action="store_false", help=hlp)
+    parser.add_argument(
+        "--no-metadata", dest="metadata", action="store_false", help=hlp
+    )
     hlp = "Do not save MCD files."
-    parser.add_argument("--no-mcd", dest="download", action="store_false", help=hlp)
+    parser.add_argument(
+        "--no-mcd", dest="download", action="store_false", help=hlp
+    )
     hlp = "Whether to ovewrite MCD files in disk."
-    parser.add_argument("--overwrite", dest="overwrite", action="store_true", help=hlp)
-    hlp = "Ignore previous queries and start anew. Will delete previous database."
+    parser.add_argument(
+        "--overwrite", dest="overwrite", action="store_true", help=hlp
+    )
+    hlp = (
+        "Ignore previous queries and start anew. Will delete previous database."
+    )
     parser.add_argument("--fresh", dest="fresh", action="store_true", help=hlp)
     hlp = "Query string to search files. Use to restrict search."
-    parser.add_argument("-q", "--query-string", dest="query_string", default=FILE_TYPE, help=hlp)
+    parser.add_argument(
+        "-q", "--query-string", dest="query_string", default=FILE_TYPE, help=hlp
+    )
     hlp = "File type ending to look for. Defaults to 'mcd'."
-    parser.add_argument("-e", "--file-ending", dest="file_type", default=FILE_TYPE, help=hlp)
+    parser.add_argument(
+        "-e", "--file-ending", dest="file_type", default=FILE_TYPE, help=hlp
+    )
+    hlp = "Whether to authenticate with a developer token. Default is to use browser-based OAuth2 authentication."
+    parser.add_argument(
+        "--token",
+        "--use-access-token",
+        dest="use_access_token",
+        action="store_true",
+        help=hlp,
+    )
     hlp = "Time in between crawls. Default is 2 hours."
-    parser.add_argument("-r", "--refresh-time", default=REFRESH_TIME, type=int, help=hlp)
+    parser.add_argument(
+        "-r", "--refresh-time", default=REFRESH_TIME, type=int, help=hlp
+    )
+    hlp = "Time in hours without new files until process terminates. Pass 'False' to never timeout."
+    parser.add_argument(
+        "-t", "--timeout-delta", help=hlp,
+    )
     # hlp = "Name of Box.com uploading user to restrict query to."
     # parser.add_argument("-u", "--user", type=str, help=hlp)
     hlp = f"Path to output metadata file. Defaults to '`project_dir`/{METADATA_FILE}'."
@@ -199,12 +256,19 @@ def argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("-d", "--data-dir", type=Path, help=hlp)
     hlp = f"Root project directory to write files to. Defaults to '{PROJECT_DIR}'."
     parser.add_argument(
-        "-o", "--output-dir", dest="project_dir", default=PROJECT_DIR, type=Path, help=hlp
+        "-o",
+        "--output-dir",
+        dest="project_dir",
+        default=PROJECT_DIR,
+        type=Path,
+        help=hlp,
     )
     return parser
 
 
-def setup_logger(name="imctransfer", level=logging.INFO) -> logging.Logger:
+def setup_logger(
+    name: str = "imctransfer", level=logging.INFO
+) -> logging.Logger:
     """The logger for the script."""
     logger = logging.getLogger(name)
     logger.setLevel(level)
@@ -228,20 +292,56 @@ def main() -> NoReturn:
         args.metadata_file = args.project_dir / METADATA_FILE
     if args.data_dir is None:
         args.data_dir = args.project_dir / DATA_DIR
+    args.timeout_delta = datetime.timedelta(
+        hours=TIMEOUT_TIME
+        if args.timeout_delta is None
+        else 1e30
+        if args.timeout_delta == "False"
+        else float(args.timeout_delta)
+    )
     args.metadata_file.parent.mkdir(exist_ok=True, parents=True)
     args.data_dir.mkdir(exist_ok=True, parents=True)
 
     # Setup box.com connection
     log.info("Reading credentials and setting up connection with server.")
-    # For OAuth:
-    # # OAuth with developer token
+
+    args.secrets_file.touch()
     secret_params = json.load(open(args.secrets_file, "r"))
-    oauth = OAuth2(**secret_params)
+    if args.use_access_token:
+        # # OAuth with developer token
+        oauth = OAuth2(**secret_params)
+    else:
+        # with user OAuth
+        # # if both "access_token" and "refresh_token" don't exist, get them
+        if ("access_token" not in secret_params) or (
+            "refresh_token" not in secret_params
+        ):
+            if "access_token" in secret_params:
+                del secret_params["access_token"]
+
+            if "refresh_token" in secret_params:
+                del secret_params["refresh_token"]
+
+            oauth = OAuth2(**secret_params)
+            auth_url, csrf_token = oauth.get_authorization_url(
+                "https://imctransfer.herokuapp.com/"
+            )
+            log.info(
+                "Please copy the code given in the browser webpage and paste the code here after."
+            )
+            time.sleep(2)
+            webbrowser.open(auth_url)
+            time.sleep(1)
+            (
+                secret_params["access_token"],
+                secret_params["refresh_token"],
+            ) = oauth.authenticate(input("Please enter the code here: "))
+
+            json.dump(secret_params, open(args.secrets_file, "w"), indent=4)
+        else:
+            oauth = OAuth2(**secret_params)
+
     client = Client(oauth)
-    # # with user OAuth
-    # auth_url, csrf_token = oauth.get_authorization_url("https://localhost:8000")
-    # oauth.authenticate(input("Please enter the code here: "))
-    # client = Client(oauth)
 
     # # For JWTAuth:
     # config = JWTAuth.from_settings_file(args.secrets_file)
